@@ -7,4 +7,3 @@ resources:
   - 01-deployment-openwebui.yaml
   - 02-service-openwebui.yaml
   - 03-pvc-openwebui.yaml
-  - 04-service-ramen-bridge.yaml

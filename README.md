@@ -1,6 +1,6 @@
 # Hybrid Local AI: Kubernetes Open WebUI + Bare-Metal RAMen AI
 
-A high-efficiency, zero-recomputation local AI infrastructure running on modest home server hardware (**Intel Core i3-4160T**, 16 GB DDR3 RAM). 
+A high-efficiency, zero-recomputation local AI infrastructure running on modest home server hardware (**Intel Core i3-4160T**, 16 GB DDR3 RAM, Fedora Linux). 
 
 This setup combines a **Kubernetes-hosted Open WebUI** frontend exposed securely via **Cloudflare Tunnel** with a **Bare-Metal RAMen AI Context Engine** on the host OS to eliminate container CPU throttling, constrain context size to prevent CPU freezes, and persist KV-cache attention slots directly to NVMe/SSD.
 
@@ -25,11 +25,9 @@ This setup combines a **Kubernetes-hosted Open WebUI** frontend exposed securely
 │                              ▼                                         │
 │                     [ openwebui Pod ] ───► [ openwebui-pvc (2Gi) ]     │
 │                              │              (Users & Chat History)     │
-│                              ▼ (OpenAI API Protocol)                   │
-│                     [ ramen-service Endpoints ]                        │
 │                              │                                         │
 └──────────────────────────────┼─────────────────────────────────────────┘
-                               │ TCP Bridge to Host (192.168.100.11:8090)
+                               │ OpenAI API: http://192.168.100.11:8090/v1
                                ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │ Bare-Metal Host (Fedora Linux - Intel i3-4160T, 16 GB RAM)             │
@@ -62,7 +60,7 @@ Running local LLMs on an older dual-core processor (Intel Core i3-4160T, 2 cores
 ### 2. Why Run RAMen Bare-Metal Outside Kubernetes?
 * **Zero Container/Cgroups Throttling**: Direct access to AVX2 instruction sets without container virtualization layers.
 * **Persistent Model & Cache Directory**: Models and session snapshots live permanently in `/home/yasir/.context-engine/` on host storage without re-downloading on pod restarts.
-* **Clean Separation of Concerns**: Kubernetes handles stateful web UI persistence, ingress routing, and TLS certificates; the bare-metal OS handles raw compute and RAM allocation.
+* **Direct Network Access**: Open WebUI in Kubernetes connects directly to the host IP (`http://192.168.100.11:8090/v1`) after allowing port 8090 in Fedora's `firewalld`.
 
 ### 3. How RAMen AI Eliminates Prompt Prefill Latency
 In standard inference engines (vanilla llama.cpp or Ollama):
@@ -83,14 +81,11 @@ With RAMen AI:
 ├── diagram.py                         # Python diagrams script generating architecture.png
 ├── docs/
 │   └── architecture.png               # High-resolution visual system diagram
-├── k8s/
-│   ├── 01-deployment-openwebui.yaml   # Open WebUI deployment with internal DNS mapping
-│   ├── 02-service-openwebui.yaml      # ClusterIP service for Open WebUI (port 8080)
-│   ├── 03-pvc-openwebui.yaml          # 2Gi storage for SQLite database & user sessions
-│   ├── 04-service-ramen-bridge.yaml   # K8s Service + Endpoints bridging to host:8090
-│   └── kustomization.yaml             # Single-command Kustomize bundle
-└── systemd/
-    └── ramen.service                  # Systemd service unit for host auto-start
+└── k8s/
+    ├── 01-deployment-openwebui.yaml   # Open WebUI deployment (points to 192.168.100.11:8090)
+    ├── 02-service-openwebui.yaml      # ClusterIP service for Open WebUI (port 8080)
+    ├── 03-pvc-openwebui.yaml          # 2Gi storage for SQLite database & user sessions
+    └── kustomization.yaml             # Single-command Kustomize bundle
 ```
 
 ---
@@ -124,42 +119,27 @@ curl http://127.0.0.1:8090/v1/models
 # Output: {"object": "list", "data": [{"id": "qwen3:4b", ...}]}
 ```
 
-#### 4. (Optional) Enable Auto-Start via Systemd
-Copy the provided unit file to `/etc/systemd/system/ramen.service`:
-
-```bash
-sudo cp systemd/ramen.service /etc/systemd/system/ramen.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now ramen.service
-```
-
 ---
 
 ### Phase 2: Kubernetes Deployment (k3s)
 
-#### 1. Deploy the Stack
-Deploy the Open WebUI application and the host bridge service using Kustomize:
+#### 1. Deploy Open WebUI
+Deploy Open WebUI using Kustomize:
 
 ```bash
 kubectl apply -k k8s/
 ```
 
-#### 2. Verify Pod and Bridge Endpoints
+#### 2. Verify Pod and Service
 ```bash
-kubectl get pods,svc,endpoints -n ai
+kubectl get pods,svc -n ai
 ```
 
-Ensure `ramen-service` shows the host endpoint:
-```text
-NAME                     ENDPOINTS            AGE
-endpoints/ramen-service  192.168.100.11:8090  1m
-```
-
-#### 3. Verify In-Cluster Connectivity
-Test that Open WebUI can query the bare-metal RAMen daemon across the bridge:
+#### 3. Verify Direct Connectivity to Host
+Test that the Open WebUI container can reach RAMen running on the host:
 
 ```bash
-kubectl exec -it -n ai deploy/openwebui -- curl -s http://ramen-service.ai.svc.cluster.local:8090/v1/models
+kubectl exec -it -n ai deploy/openwebui -- curl -s http://192.168.100.11:8090/v1/models
 ```
 
 ---
