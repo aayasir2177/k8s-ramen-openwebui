@@ -1,0 +1,17 @@
+[Unit]
+Description=RAMen AI Context Engine Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yasir
+Environment=PATH=/home/yasir/.ramen/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/yasir/.ramen/bin/ramen start qwen3-4b --ctx 2048 --host 0.0.0.0 --port 8090
+ExecStop=/home/yasir/.ramen/bin/ramen stop
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

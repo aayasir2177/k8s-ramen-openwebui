@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openwebui
+  namespace: ai
+  labels:
+    app: openwebui
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openwebui
+  template:
+    metadata:
+      labels:
+        app: openwebui
+    spec:
+      containers:
+        - name: openwebui
+          image: ghcr.io/open-webui/open-webui:main
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: WEBUI_AUTH
+              value: "true"
+            - name: ENABLE_OLLAMA_API
+              value: "false"
+            - name: OPENAI_API_BASE_URL
+              value: "http://ramen-service.ai.svc.cluster.local:8090/v1"
+            - name: OPENAI_API_KEY
+              value: "none"
+          volumeMounts:
+            - name: webui-storage
+              mountPath: /app/backend/data
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: 2000m
+              memory: 3Gi
+      volumes:
+        - name: webui-storage
+          persistentVolumeClaim:
+            claimName: openwebui-pvc
