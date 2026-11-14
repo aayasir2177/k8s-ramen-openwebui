@@ -1,4 +1,4 @@
-# Hybrid Local AI: Kubernetes Open WebUI + Bare-Metal RAMen AI
+# Kubernetes Open WebUI + Bare-Metal RAMen AI
 
 A lightweight, zero-recomputation private AI stack combining a **Kubernetes-hosted Open WebUI** frontend with a bare-metal **RAMen AI Context Engine** on the host.
 
@@ -8,7 +8,7 @@ This architecture eliminates prompt prefill lag on resource-constrained hardware
 
 ## Architecture & Data Flow
 
-![Hybrid Local AI Architecture](docs/architecture.gif)
+![Architecture & Data Flow](docs/architecture.gif)
 
 * **Public Ingress**: Outbound Cloudflare QUIC tunnel routes traffic to Open WebUI with zero open router ports.
 * **In-Cluster Frontend**: Open WebUI runs in Kubernetes with persistent SQLite storage for users and chat history.

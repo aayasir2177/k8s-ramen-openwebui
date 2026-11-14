@@ -52,7 +52,7 @@ EDGE_ATTR = {
 def build_diagram(outformat):
     out_path = os.path.join(OUTPUT_DIR, NAME)
     with Diagram(
-        "Hybrid Local AI Stack: Kubernetes Open WebUI + Bare-Metal RAMen AI",
+        "Kubernetes Open WebUI + Bare-Metal RAMen AI",
         show=False,
         filename=out_path,
         outformat=outformat,
