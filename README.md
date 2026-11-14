@@ -1,6 +1,6 @@
 # Hybrid Local AI: Kubernetes Open WebUI + Bare-Metal RAMen AI
 
-A high-efficiency, zero-recomputation local AI infrastructure running on modest home server hardware (**Intel Core i3-4160T**, 16 GB DDR3 RAM, Fedora Linux). 
+A high-efficiency, zero-recomputation local AI infrastructure running on modest server hardware. 
 
 This setup combines a **Kubernetes-hosted Open WebUI** frontend exposed securely via **Cloudflare Tunnel** with a **Bare-Metal RAMen AI Context Engine** on the host OS to eliminate container CPU throttling, constrain context size to prevent CPU freezes, and persist KV-cache attention slots directly to NVMe/SSD.
 
@@ -14,11 +14,11 @@ This setup combines a **Kubernetes-hosted Open WebUI** frontend exposed securely
 [ Browser / User ]
         │ (HTTPS)
         ▼
-[ Cloudflare Edge: openwebui.homenode.online ]
+[ Cloudflare Edge: Secure Public Ingress ]
         │
         ▼ (Outbound QUIC Tunnel - Zero Inbound Ports)
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Kubernetes Cluster (k3s) - Namespace: ai                               │
+│ Kubernetes Cluster - Namespace: ai                                     │
 │                                                                        │
 │  [ cloudflared ] ───► [ openwebui-service:8080 ]                       │
 │                              │                                         │
@@ -27,19 +27,19 @@ This setup combines a **Kubernetes-hosted Open WebUI** frontend exposed securely
 │                              │              (Users & Chat History)     │
 │                              │                                         │
 └──────────────────────────────┼─────────────────────────────────────────┘
-                               │ OpenAI API: http://192.168.100.11:8090/v1
+                               │ OpenAI API Protocol (:8090/v1)
                                ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Bare-Metal Host (Fedora Linux - Intel i3-4160T, 16 GB RAM)             │
+│ Bare-Metal Host Runtime                                                │
 │                                                                        │
-│  [ firewalld: Port 8090/TCP Allowed ]                                  │
+│  [ Host Firewall: Port 8090 Allowed ]                                  │
 │        │                                                               │
 │        ▼                                                               │
 │  [ RAMen AI Daemon (:8090) ]                                           │
 │        │                                                               │
-│        ├──► [ llama-server ] (Qwen3 4B Instruct / 2048 Context / 4 Thr)│
+│        ├──► [ llama-server ] (Quantized GGUF / 2048 Context)           │
 │        │                                                               │
-│        └──► [ SSD KV-Cache Store ] (~/.context-engine/sessions)        │
+│        └──► [ SSD Storage ] (Session KV-Cache)                         │
 │             (Zero-Recompute Slot Swapping in ~50ms)                    │
 └────────────────────────────────────────────────────────────────────────┘
 ```
@@ -48,28 +48,28 @@ This setup combines a **Kubernetes-hosted Open WebUI** frontend exposed securely
 
 ## The Engineering Challenge & Solution
 
-### 1. The Dual-Core CPU & Memory Bottleneck
-Running local LLMs on an older dual-core processor (Intel Core i3-4160T, 2 cores, 4 threads, 35W TDP, Haswell) poses severe constraints:
-* **8B Model Overload**: An 8-Billion parameter model requires reading ~4.7 GB of weights per token. On a dual-core CPU with DDR3 memory bandwidth, prompt processing locks the CPU at 100% for minutes.
-* **Unconstrained Context Windows**: When RAMen starts with 14+ GB of free memory, its automatic planner allocates **19,000 to 51,000 token context windows**. On a low-power CPU, calculating attention matrices across 19K tokens paralyzes the system indefinitely.
+### 1. Dual-Core CPU & Memory Bottlenecks
+Running local LLMs on resource-constrained processors poses severe constraints:
+* **8B Model Overload**: Large models require massive memory bandwidth and compute operations per token. On low-power CPUs without dedicated GPUs, prompt processing locks the system for minutes.
+* **Unconstrained Context Windows**: When inference servers allocate **19,000 to 51,000 token context windows**, calculating attention matrices across long contexts paralyzes dual-core systems.
 * **The Solution**: 
-  1. Downscale to a compact, high-efficiency 4B model (**Qwen3 4B Instruct**, 2.5 GB).
+  1. Downscale to a compact, high-efficiency quantized model (such as a 3B or 4B GGUF).
   2. Enforce a strict context window of **2,048 tokens** (`--ctx 2048`).
-  3. Maximize parallel execution across all logical threads (`--threads 4`).
+  3. Maximize parallel execution across logical CPU threads.
 
 ### 2. Why Run RAMen Bare-Metal Outside Kubernetes?
-* **Zero Container/Cgroups Throttling**: Direct access to AVX2 instruction sets without container virtualization layers.
-* **Persistent Model & Cache Directory**: Models and session snapshots live permanently in `/home/yasir/.context-engine/` on host storage without re-downloading on pod restarts.
-* **Direct Network Access**: Open WebUI in Kubernetes connects directly to the host IP (`http://192.168.100.11:8090/v1`) after allowing port 8090 in Fedora's `firewalld`.
+* **Zero Container/Cgroups Throttling**: Direct access to AVX instruction sets without container virtualization layers.
+* **Persistent Model & Cache Directory**: Models and session snapshots live permanently on host storage without re-downloading on container restarts.
+* **Direct Network Access**: Open WebUI in Kubernetes connects directly to the host IP (`http://<HOST-IP>:8090/v1`) through the local firewall.
 
 ### 3. How RAMen AI Eliminates Prompt Prefill Latency
 In standard inference engines (vanilla llama.cpp or Ollama):
 * Every turn in a conversation forces the model to re-read and compute the mathematical Key-Value attention states for **all previous messages** (Prompt Evaluation).
-* On an i3 CPU, a 1,500-token chat history requires 30 to 60 seconds of 100% CPU time before emitting token 1.
+* On low-power CPUs, a 1,500-token chat history requires 30 to 60 seconds of 100% CPU time before emitting token 1.
 
 With RAMen AI:
 * RAMen captures the computed **KV cache vectors** in memory after each generation.
-* **SSD Slot Swapping**: When switching chats or when an idle timeout triggers, RAMen snapshots the binary KV matrices to `~/.context-engine/sessions/` on the SSD.
+* **SSD Slot Swapping**: When switching chats or when an idle timeout triggers, RAMen snapshots the binary KV matrices to disk on the SSD.
 * **Instant Recall**: When resuming a conversation, RAMen reads the session back into memory in ~50ms, skipping the prompt prefill phase entirely.
 
 ---
@@ -82,7 +82,7 @@ With RAMen AI:
 ├── docs/
 │   └── architecture.png               # High-resolution visual system diagram
 └── k8s/
-    ├── 01-deployment-openwebui.yaml   # Open WebUI deployment (points to 192.168.100.11:8090)
+    ├── 01-deployment-openwebui.yaml   # Open WebUI deployment (configured for host:8090)
     ├── 02-service-openwebui.yaml      # ClusterIP service for Open WebUI (port 8080)
     ├── 03-pvc-openwebui.yaml          # 2Gi storage for SQLite database & user sessions
     └── kustomization.yaml             # Single-command Kustomize bundle
@@ -92,10 +92,10 @@ With RAMen AI:
 
 ## Step-by-Step Deployment Guide
 
-### Phase 1: Host Preparation (Fedora Linux)
+### Phase 1: Host Preparation
 
-#### 1. Open Port 8090 in Fedora Firewall
-Fedora's `firewalld` blocks pod network traffic (`10.42.0.0/16`) to host ports by default. Allow TCP port 8090:
+#### 1. Open Port 8090 in Host Firewall
+Allow pod network traffic to access port 8090:
 
 ```bash
 sudo firewall-cmd --add-port=8090/tcp --permanent
@@ -116,30 +116,28 @@ ramen start qwen3-4b --ctx 2048 --host 0.0.0.0 --port 8090
 Verify the local model server is healthy:
 ```bash
 curl http://127.0.0.1:8090/v1/models
-# Output: {"object": "list", "data": [{"id": "qwen3:4b", ...}]}
 ```
 
 ---
 
-### Phase 2: Kubernetes Deployment (k3s)
+### Phase 2: Kubernetes Deployment
 
-#### 1. Deploy Open WebUI
-Deploy Open WebUI using Kustomize:
+#### 1. Configure the Target Host IP
+In `k8s/01-deployment-openwebui.yaml`, verify `OPENAI_API_BASE_URL` matches your host's local IP address:
+```yaml
+- name: OPENAI_API_BASE_URL
+  value: "http://<YOUR-HOST-IP>:8090/v1"
+```
 
+#### 2. Deploy Open WebUI
 ```bash
 kubectl apply -k k8s/
 ```
 
-#### 2. Verify Pod and Service
+#### 3. Verify Pod and In-Cluster Access
 ```bash
 kubectl get pods,svc -n ai
-```
-
-#### 3. Verify Direct Connectivity to Host
-Test that the Open WebUI container can reach RAMen running on the host:
-
-```bash
-kubectl exec -it -n ai deploy/openwebui -- curl -s http://192.168.100.11:8090/v1/models
+kubectl exec -it -n ai deploy/openwebui -- curl -s http://<YOUR-HOST-IP>:8090/v1/models
 ```
 
 ---
@@ -158,17 +156,3 @@ ramen status
 ls -lh ~/.context-engine/sessions/
 ```
 Shows serialized binary cache files persisted to disk for instant conversation resumption without CPU recalculation.
-
----
-
-## Hardware Specifications
-
-| Component | Specification |
-| :--- | :--- |
-| **Host System** | Fedora Linux 41 (x86_64) |
-| **CPU** | Intel(R) Core(TM) i3-4160T @ 3.10GHz (2 Cores, 4 Threads, 35W TDP) |
-| **Memory** | 16 GB DDR3 Non-ECC |
-| **Storage** | High-speed SSD (KV-cache slot swapping) |
-| **Orchestration**| Lightweight Kubernetes (`k3s`) |
-| **Ingress** | Outbound Cloudflare QUIC Tunnel (`cloudflared`) |
-| **Active Model** | `Qwen3-4B-Instruct-2507-Q4_K_M.gguf` (2.5 GB) |

@@ -53,26 +53,26 @@ with Diagram(
     edge_attr=EDGE_ATTR,
 ):
     user = User("Client Browser\n(HTTPS)")
-    cf_edge = Cloudflare("Cloudflare Edge\n(openwebui.homenode.online)")
+    cf_edge = Cloudflare("Cloudflare Edge\n(Secure Public Ingress)")
 
-    with Cluster("Physical Host: Fedora Linux (Intel i3-4160T, 16GB DDR3, 192.168.100.11)", graph_attr={"bgcolor": "#f8fafc", "pencolor": "#64748b", "fontsize": "15"}):
-        with Cluster("Kubernetes Cluster (k3s) - Namespace: ai", graph_attr={"bgcolor": "#ffffff", "pencolor": "#3b82f6", "fontsize": "13"}):
+    with Cluster("Physical Host (Bare-Metal)", graph_attr={"bgcolor": "#f8fafc", "pencolor": "#64748b", "fontsize": "15"}):
+        with Cluster("Kubernetes Cluster - Namespace: ai", graph_attr={"bgcolor": "#ffffff", "pencolor": "#3b82f6", "fontsize": "13"}):
             tunnel = Deployment("cloudflared\n(Outbound QUIC)")
             webui_svc = Service("openwebui-service\n(Port 8080)")
             webui_pod = Pod("openwebui\n(Web Container)")
-            webui_pvc = PersistentVolumeClaim("openwebui-pvc\n(2Gi Chat DB)")
+            webui_pvc = PersistentVolumeClaim("openwebui-pvc\n(Persistent DB)")
 
             tunnel >> Edge(color="#0284c7", label="internal proxy") >> webui_svc
             webui_svc >> Edge(color="#0284c7") >> webui_pod
             webui_pod >> Edge(color="#64748b", style="dashed", label="persists") >> webui_pvc
 
-        with Cluster("Bare-Metal Host Runtime (Fedora 41)", graph_attr={"bgcolor": "#fef3c7", "pencolor": "#f59e0b", "fontsize": "13"}):
-            firewall = LinuxGeneral("firewalld\n(Port 8090/TCP Allowed)")
+        with Cluster("Bare-Metal AI Runtime", graph_attr={"bgcolor": "#fef3c7", "pencolor": "#f59e0b", "fontsize": "13"}):
+            firewall = LinuxGeneral("Host Firewall\n(Port 8090 Allowed)")
             ramen_daemon = Rack("RAMen Daemon\n(Context Engine :8090)")
-            llama_engine = Pod("llama-server\n(Qwen3-4B / 2048 ctx)")
-            ssd_cache = Storage("SSD Session Store\n(~/.context-engine/sessions)")
+            llama_engine = Pod("llama-server\n(Quantized GGUF / 2048 ctx)")
+            ssd_cache = Storage("SSD Storage\n(Session KV-Cache)")
 
-            webui_pod >> Edge(color="#ea580c", style="bold", label="HTTP: 192.168.100.11:8090/v1") >> firewall
+            webui_pod >> Edge(color="#ea580c", style="bold", label="OpenAI API Protocol\n(:8090/v1)") >> firewall
             firewall >> Edge(color="#ea580c") >> ramen_daemon
             ramen_daemon >> Edge(color="#ea580c", label="manages slots") >> llama_engine
             ramen_daemon >> Edge(color="#d97706", style="dashed", label="zero-recompute KV cache swap") >> ssd_cache
