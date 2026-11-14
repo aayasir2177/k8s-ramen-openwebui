@@ -68,20 +68,3 @@ kubectl get pods -n ai
 kubectl exec -it -n ai deploy/openwebui -- curl -s http://<HOST-IP>:8090/v1/models
 ```
 
----
-
-## Project Structure
-
-```text
-.
-├── diagram.py                         # Generates architecture diagram & animated GIF
-├── docs/
-│   ├── architecture.gif               # Animated data flow GIF (1760x703, HD)
-│   ├── architecture.png               # High-resolution static topology
-│   └── openwebui ss.png               # Live chat verification screenshot
-└── k8s/
-    ├── 01-deployment-openwebui.yaml   # Open WebUI deployment (configured for host:8090)
-    ├── 02-service-openwebui.yaml      # ClusterIP service (port 8080)
-    ├── 03-pvc-openwebui.yaml          # Persistent storage for user chats
-    └── kustomization.yaml             # Kustomize manifest bundle
-```
