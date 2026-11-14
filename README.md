@@ -1,158 +1,87 @@
 # Hybrid Local AI: Kubernetes Open WebUI + Bare-Metal RAMen AI
 
-A high-efficiency, zero-recomputation local AI infrastructure running on modest server hardware. 
+A lightweight, zero-recomputation private AI stack combining a **Kubernetes-hosted Open WebUI** frontend with a bare-metal **RAMen AI Context Engine** on the host.
 
-This setup combines a **Kubernetes-hosted Open WebUI** frontend exposed securely via **Cloudflare Tunnel** with a **Bare-Metal RAMen AI Context Engine** on the host OS to eliminate container CPU throttling, constrain context size to prevent CPU freezes, and persist KV-cache attention slots directly to NVMe/SSD.
-
----
-
-## Architecture Diagram
-
-![Hybrid Local AI Architecture](docs/architecture.png)
-
-```text
-[ Browser / User ]
-        │ (HTTPS)
-        ▼
-[ Cloudflare Edge: Secure Public Ingress ]
-        │
-        ▼ (Outbound QUIC Tunnel - Zero Inbound Ports)
-┌────────────────────────────────────────────────────────────────────────┐
-│ Kubernetes Cluster - Namespace: ai                                     │
-│                                                                        │
-│  [ cloudflared ] ───► [ openwebui-service:8080 ]                       │
-│                              │                                         │
-│                              ▼                                         │
-│                     [ openwebui Pod ] ───► [ openwebui-pvc (2Gi) ]     │
-│                              │              (Users & Chat History)     │
-│                              │                                         │
-└──────────────────────────────┼─────────────────────────────────────────┘
-                               │ OpenAI API Protocol (:8090/v1)
-                               ▼
-┌────────────────────────────────────────────────────────────────────────┐
-│ Bare-Metal Host Runtime                                                │
-│                                                                        │
-│  [ Host Firewall: Port 8090 Allowed ]                                  │
-│        │                                                               │
-│        ▼                                                               │
-│  [ RAMen AI Daemon (:8090) ]                                           │
-│        │                                                               │
-│        ├──► [ llama-server ] (Quantized GGUF / 2048 Context)           │
-│        │                                                               │
-│        └──► [ SSD Storage ] (Session KV-Cache)                         │
-│             (Zero-Recompute Slot Swapping in ~50ms)                    │
-└────────────────────────────────────────────────────────────────────────┘
-```
+This architecture eliminates prompt prefill lag on resource-constrained hardware by swapping persistent KV-cache attention slots directly to SSD and enforcing a strict 2,048-token context window.
 
 ---
 
-## The Engineering Challenge & Solution
+## Architecture & Data Flow
 
-### 1. Dual-Core CPU & Memory Bottlenecks
-Running local LLMs on resource-constrained processors poses severe constraints:
-* **8B Model Overload**: Large models require massive memory bandwidth and compute operations per token. On low-power CPUs without dedicated GPUs, prompt processing locks the system for minutes.
-* **Unconstrained Context Windows**: When inference servers allocate **19,000 to 51,000 token context windows**, calculating attention matrices across long contexts paralyzes dual-core systems.
-* **The Solution**: 
-  1. Downscale to a compact, high-efficiency quantized model (such as a 3B or 4B GGUF).
-  2. Enforce a strict context window of **2,048 tokens** (`--ctx 2048`).
-  3. Maximize parallel execution across logical CPU threads.
+![Hybrid Local AI Architecture](docs/architecture.gif)
 
-### 2. Why Run RAMen Bare-Metal Outside Kubernetes?
-* **Zero Container/Cgroups Throttling**: Direct access to AVX instruction sets without container virtualization layers.
-* **Persistent Model & Cache Directory**: Models and session snapshots live permanently on host storage without re-downloading on container restarts.
-* **Direct Network Access**: Open WebUI in Kubernetes connects directly to the host IP (`http://<HOST-IP>:8090/v1`) through the local firewall.
-
-### 3. How RAMen AI Eliminates Prompt Prefill Latency
-In standard inference engines (vanilla llama.cpp or Ollama):
-* Every turn in a conversation forces the model to re-read and compute the mathematical Key-Value attention states for **all previous messages** (Prompt Evaluation).
-* On low-power CPUs, a 1,500-token chat history requires 30 to 60 seconds of 100% CPU time before emitting token 1.
-
-With RAMen AI:
-* RAMen captures the computed **KV cache vectors** in memory after each generation.
-* **SSD Slot Swapping**: When switching chats or when an idle timeout triggers, RAMen snapshots the binary KV matrices to disk on the SSD.
-* **Instant Recall**: When resuming a conversation, RAMen reads the session back into memory in ~50ms, skipping the prompt prefill phase entirely.
+* **Public Ingress**: Outbound Cloudflare QUIC tunnel routes traffic to Open WebUI with zero open router ports.
+* **In-Cluster Frontend**: Open WebUI runs in Kubernetes with persistent SQLite storage for users and chat history.
+* **Bare-Metal Inference**: Open WebUI queries the host RAMen daemon over the local network (`:8090/v1`), providing unthrottled CPU AVX performance.
+* **Zero-Recompute KV Cache**: Attention states snapshot to SSD (`~/.context-engine/sessions`) for sub-second conversation resumption without CPU recalculation.
 
 ---
 
-## Repository Structure
+## Live Verification
 
-```text
-.
-├── diagram.py                         # Python diagrams script generating architecture.png
-├── docs/
-│   └── architecture.png               # High-resolution visual system diagram
-└── k8s/
-    ├── 01-deployment-openwebui.yaml   # Open WebUI deployment (configured for host:8090)
-    ├── 02-service-openwebui.yaml      # ClusterIP service for Open WebUI (port 8080)
-    ├── 03-pvc-openwebui.yaml          # 2Gi storage for SQLite database & user sessions
-    └── kustomization.yaml             # Single-command Kustomize bundle
-```
+Chatting in real-time with local model inference served through the hybrid pipeline:
+
+![Open WebUI Chat Verification](docs/openwebui%20ss.png)
 
 ---
 
-## Step-by-Step Deployment Guide
+## Why This Architecture?
 
-### Phase 1: Host Preparation
+| Challenge | Standard Containerized Inference | Hybrid Bare-Metal + RAMen AI |
+| :--- | :--- | :--- |
+| **Prompt Prefill (TTFT)** | Recalculates entire chat history every turn (30-60s CPU lockup) | Restores KV-cache from SSD in ~50ms (Zero-Recompute) |
+| **Context Window** | Unconstrained 19K-51K tokens freeze low-power CPUs | Strict 2,048-token cap (`--ctx 2048`) maintains fluid token output |
+| **CPU Execution** | Throttled by container cgroups virtualization | Direct bare-metal execution with full AVX instructions |
+| **Public Exposure** | Requires port forwarding or dynamic DNS | Encrypted outbound Cloudflare QUIC tunnel |
 
-#### 1. Open Port 8090 in Host Firewall
-Allow pod network traffic to access port 8090:
+---
+
+## Quickstart
+
+### 1. Host Preparation
+Allow the port in the host firewall, install RAMen, and start the model server:
 
 ```bash
-sudo firewall-cmd --add-port=8090/tcp --permanent
-sudo firewall-cmd --reload
-```
+# Allow port 8090 from pod network
+sudo firewall-cmd --add-port=8090/tcp --permanent && sudo firewall-cmd --reload
 
-#### 2. Install RAMen AI
-```bash
+# Install and launch RAMen with 2K context
 curl -fsSL https://getramenai.com/install.sh | bash
-export PATH="$HOME/.ramen/bin:$PATH"
-```
-
-#### 3. Start RAMen with 2048 Context Limit
-```bash
 ramen start qwen3-4b --ctx 2048 --host 0.0.0.0 --port 8090
 ```
 
-Verify the local model server is healthy:
+Verify the local model endpoint:
 ```bash
 curl http://127.0.0.1:8090/v1/models
 ```
 
----
+### 2. Kubernetes Deployment
+Deploy the Open WebUI stack using Kustomize:
 
-### Phase 2: Kubernetes Deployment
-
-#### 1. Configure the Target Host IP
-In `k8s/01-deployment-openwebui.yaml`, verify `OPENAI_API_BASE_URL` matches your host's local IP address:
-```yaml
-- name: OPENAI_API_BASE_URL
-  value: "http://<YOUR-HOST-IP>:8090/v1"
-```
-
-#### 2. Deploy Open WebUI
 ```bash
 kubectl apply -k k8s/
 ```
 
-#### 3. Verify Pod and In-Cluster Access
+Verify the pod and internal connectivity:
 ```bash
-kubectl get pods,svc -n ai
-kubectl exec -it -n ai deploy/openwebui -- curl -s http://<YOUR-HOST-IP>:8090/v1/models
+kubectl get pods -n ai
+kubectl exec -it -n ai deploy/openwebui -- curl -s http://<HOST-IP>:8090/v1/models
 ```
 
 ---
 
-## Operational Verification
+## Project Structure
 
-### Check Context Memory & Active Slots
-```bash
-ramen status
+```text
+.
+├── diagram.py                         # Generates architecture diagram & animated GIF
+├── docs/
+│   ├── architecture.gif               # Animated data flow GIF (1760x703, HD)
+│   ├── architecture.png               # High-resolution static topology
+│   └── openwebui ss.png               # Live chat verification screenshot
+└── k8s/
+    ├── 01-deployment-openwebui.yaml   # Open WebUI deployment (configured for host:8090)
+    ├── 02-service-openwebui.yaml      # ClusterIP service (port 8080)
+    ├── 03-pvc-openwebui.yaml          # Persistent storage for user chats
+    └── kustomization.yaml             # Kustomize manifest bundle
 ```
-* Displays active conversation slots currently resident in RAM.
-* Confirms the 2,048 token limit per slot.
-
-### Inspect Saved KV-Cache on SSD
-```bash
-ls -lh ~/.context-engine/sessions/
-```
-Shows serialized binary cache files persisted to disk for instant conversation resumption without CPU recalculation.
